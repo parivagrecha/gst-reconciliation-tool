@@ -1,115 +1,102 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 from io import BytesIO
 
-from gst import preprocess, reconcile
-from database import save_results
+from gst import preprocess, suvit_style_reconciliation
 
-st.set_page_config(page_title="GST Reconciliation Tool", layout="wide")
 
-st.title("📊 GST Reconciliation Tool")
+st.set_page_config(
+    page_title="GST Reconciliation Tool",
+    layout="wide"
+)
 
-# ---------------- COMPANY INPUT ----------------
-st.subheader("Company Details")
 
-c1, c2 = st.columns(2)
-with c1:
-    company_name = st.text_input("Company Name")
-with c2:
-    company_gstin = st.text_input("Company GSTIN")
+st.title("GST Reconciliation Tool")
+st.caption("Invoice-wise reconciliation between GST data and Books")
 
-st.divider()
 
-# ---------------- FILE UPLOAD ----------------
-u1, u2 = st.columns(2)
-with u1:
-    gst_file = st.file_uploader("Upload GST Excel", type=["xlsx"])
-with u2:
-    books_file = st.file_uploader("Upload Books Excel", type=["xlsx"])
+company_name = st.text_input("Company Name")
+company_gstin = st.text_input("Company GSTIN")
 
-# ---------------- PROCESS ----------------
-if gst_file and books_file and company_name and company_gstin:
-    gst_df = preprocess(pd.read_excel(gst_file))
-    books_df = preprocess(pd.read_excel(books_file))
 
-    if st.button("🚀 Run Reconciliation"):
-        result = reconcile(
+gst_file = st.file_uploader("Upload GST Data (GSTR-2B / GSTR-1)", type=["xlsx"])
+books_file = st.file_uploader("Upload Books Data", type=["xlsx"])
+
+
+if st.button("Run Reconciliation"):
+    if not company_name or not company_gstin:
+        st.error("Please enter Company Name and GSTIN")
+
+    elif gst_file and books_file:
+        gst_df = preprocess(pd.read_excel(gst_file))
+        books_df = preprocess(pd.read_excel(books_file))
+
+        result = suvit_style_reconciliation(
             gst_df,
             books_df,
             company_name,
             company_gstin
         )
 
-        # ---------------- SUMMARY ----------------
-        st.subheader("📌 Reconciliation Summary")
+        
+        st.subheader("Match Status Summary")
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total Invoices", len(result))
-        col2.metric(
-            "Fully Matched",
-            (result["Remarks"] == "Fully Matched").sum()
+        matched_cnt = (result["Status"] == "Matched").sum()
+        missing_gst_cnt = (result["Status"] == "Missing in GST").sum()
+        missing_books_cnt = (result["Status"] == "Missing in Books").sum()
+
+        s1, s2, s3 = st.columns(3)
+        s1.metric("Fully Matched", matched_cnt)
+        s2.metric("Missing in GST", missing_gst_cnt)
+        s3.metric("Missing in Books", missing_books_cnt)
+
+        
+        st.subheader("Match Status – Graph")
+
+        status_df = pd.DataFrame(
+            {
+                "Count": [
+                    matched_cnt,
+                    missing_gst_cnt,
+                    missing_books_cnt
+                ]
+            },
+            index=[
+                "Fully Matched",
+                "Missing in GST",
+                "Missing in Books"
+            ]
         )
-        col3.metric(
-            "Missing in GST",
-            (result["Remarks"] == "Missing in GST").sum()
-        )
-        col4.metric(
-            "Missing in Books",
-            (result["Remarks"] == "Missing in Books").sum()
-        )
 
-        # ---------------- CHART ----------------
-        chart_df = result["Remarks"].value_counts().reset_index()
-        chart_df.columns = ["Status", "Count"]
+        st.bar_chart(status_df)
 
-        fig = px.bar(
-            chart_df,
-            x="Status",
-            y="Count",
-            text="Count",
-            title="Invoice Status Distribution"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        
+        st.subheader("Amount Difference Summary")
 
-        # ---------------- STATUS-WISE TABLES ----------------
-        st.subheader("✅ Fully Matched Invoices")
-        matched_df = result[result["Remarks"] == "Fully Matched"]
-        if matched_df.empty:
-            st.info("No fully matched invoices")
-        else:
-            st.dataframe(matched_df, use_container_width=True)
+        diff_summary = result["Diff Category"].value_counts().to_frame("Count")
+        diff_summary.index.name = "Difference Range"
 
-        st.subheader("❌ Missing in GST")
-        missing_gst_df = result[result["Remarks"] == "Missing in GST"]
-        if missing_gst_df.empty:
-            st.info("No invoices missing in GST")
-        else:
-            st.dataframe(missing_gst_df, use_container_width=True)
+        st.bar_chart(diff_summary)
 
-        st.subheader("⚠️ Missing in Books")
-        missing_books_df = result[result["Remarks"] == "Missing in Books"]
-        if missing_books_df.empty:
-            st.info("No invoices missing in Books")
-        else:
-            st.dataframe(missing_books_df, use_container_width=True)
+        
+        st.subheader("Invoice-wise Reconciliation Details")
+        st.dataframe(result, use_container_width=True)
 
-        # ---------------- SAVE ----------------
-        save_results(result)
-
-        # ---------------- DOWNLOAD ----------------
+        
         output = BytesIO()
-        result.to_excel(output, index=False)
+        result.to_excel(output, index=False, engine="openpyxl")
 
         st.download_button(
-            "⬇ Download Full Reconciliation Excel",
-            output.getvalue(),
-            "gst_reconciliation.xlsx",
+            "Download Excel",
+            data=output.getvalue(),
+            file_name="GST_Reconciliation_Result.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-else:
-    st.info("Enter company details and upload both files to proceed")
+    else:
+        st.error("Please upload both GST and Books files")
+
+
 
 
 
